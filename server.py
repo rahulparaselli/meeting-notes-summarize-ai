@@ -225,6 +225,89 @@ async def ingest_meeting_file(
     }
 
 
+@app.post("/api/meetings/ingest-audio")
+async def ingest_meeting_audio(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    attendees: str = Form(""),
+):
+    """Ingest an audio file (mp3, wav, m4a, webm, ogg) — transcribes via Whisper then ingests."""
+    from src.ingestion.pipeline import ingest_audio
+
+    allowed_extensions = {".mp3", ".wav", ".m4a", ".webm", ".ogg", ".flac", ".mp4"}
+    filename = file.filename or "audio.wav"
+    ext = Path(filename).suffix.lower()
+
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported audio format '{ext}'. Supported: {', '.join(sorted(allowed_extensions))}",
+        )
+
+    # Save uploaded file to a temp location
+    temp_dir = DATA_DIR / "temp"
+    temp_dir.mkdir(exist_ok=True)
+    temp_path = temp_dir / f"upload_{filename}"
+
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Audio file is empty")
+
+        temp_path.write_bytes(content)
+        logger.info(f"Saved audio to {temp_path} ({len(content)} bytes)")
+
+        meeting_title = title or filename.rsplit(".", 1)[0]
+        attendee_list = (
+            [a.strip() for a in attendees.split(",") if a.strip()]
+            if attendees
+            else []
+        )
+
+        logger.info(f"Transcribing audio '{filename}' as '{meeting_title}'")
+
+        # Run the full audio pipeline: transcribe → chunk → embed → store
+        meta = await ingest_audio(
+            audio_path=temp_path,
+            title=meeting_title,
+            attendees=attendee_list,
+        )
+
+        # Save meeting metadata
+        meetings = _load_meetings()
+        meetings[meta.id] = {
+            "title": meta.title,
+            "date": datetime.now().isoformat(),
+            "attendees": meta.attendees,
+            "duration_seconds": meta.duration_seconds,
+            "source": "audio",
+        }
+        _save_meetings(meetings)
+
+        logger.info(f"Audio ingested: id={meta.id}, duration={meta.duration_seconds}s")
+
+        return {
+            "id": meta.id,
+            "title": meta.title,
+            "date": meetings[meta.id]["date"],
+            "attendees": meta.attendees,
+            "duration_seconds": meta.duration_seconds,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Audio ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Audio processing failed: {e}")
+    finally:
+        # Cleanup temp file
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
+
+
 # ── Routes: Chat History ────────────────────────────────────────────────────
 
 

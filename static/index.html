@@ -112,8 +112,9 @@
     </div>
     <div class="modal-body">
       <div class="form-tabs">
-        <button class="form-tab active" id="tabPaste" onclick="switchIngestTab('paste')">📝 Paste Text</button>
-        <button class="form-tab" id="tabUpload" onclick="switchIngestTab('upload')">📄 Upload File</button>
+        <button class="form-tab active" id="tabPaste" onclick="switchIngestTab('paste')">Paste Text</button>
+        <button class="form-tab" id="tabUpload" onclick="switchIngestTab('upload')">Upload File</button>
+        <button class="form-tab" id="tabAudio" onclick="switchIngestTab('audio')">Upload Audio</button>
       </div>
 
       <div class="form-group">
@@ -141,10 +142,32 @@
           <input type="file" id="ingestFile" accept=".txt,.md,.csv">
         </div>
       </div>
+
+      <!-- Audio tab -->
+      <div id="ingestAudioTab" style="display:none;">
+        <div class="form-group">
+          <label for="ingestAudio">Upload Audio File</label>
+          <div class="audio-upload-area" id="audioDropZone">
+            <div class="audio-upload-icon">🎤</div>
+            <div class="audio-upload-text">Drop audio file here or click to browse</div>
+            <div class="audio-upload-formats">MP3, WAV, M4A, WebM, OGG, FLAC</div>
+            <input type="file" id="ingestAudio" accept=".mp3,.wav,.m4a,.webm,.ogg,.flac,.mp4" style="display:none;">
+          </div>
+          <div class="audio-file-selected" id="audioFileInfo" style="display:none;">
+            <span class="audio-file-icon">🎵</span>
+            <span class="audio-file-name" id="audioFileName"></span>
+            <span class="audio-file-size" id="audioFileSize"></span>
+            <button class="audio-file-remove" onclick="clearAudioFile()" title="Remove">✕</button>
+          </div>
+          <div class="audio-upload-note">
+            Transcription is powered by OpenAI Whisper. Processing may take 1-3 minutes depending on audio length.
+          </div>
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeIngestModal()">Cancel</button>
-      <button class="btn btn-primary" id="btnIngest" onclick="ingestMeeting()">⚡ Ingest</button>
+      <button class="btn btn-primary" id="btnIngest" onclick="ingestMeeting()">Ingest</button>
     </div>
   </div>
 </div>

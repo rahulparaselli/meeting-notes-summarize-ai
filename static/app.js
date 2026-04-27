@@ -340,6 +340,8 @@ function openIngestModal() {
   $('ingestAttendees').value = '';
   $('ingestText').value = '';
   $('ingestFile').value = '';
+  clearAudioFile();
+  _initAudioDropZone();
 }
 
 function closeIngestModal() {
@@ -349,21 +351,100 @@ function closeIngestModal() {
 function switchIngestTab(tab) {
   $('tabPaste').classList.toggle('active', tab === 'paste');
   $('tabUpload').classList.toggle('active', tab === 'upload');
+  $('tabAudio').classList.toggle('active', tab === 'audio');
   $('ingestPasteTab').style.display = tab === 'paste' ? 'block' : 'none';
   $('ingestUploadTab').style.display = tab === 'upload' ? 'block' : 'none';
+  $('ingestAudioTab').style.display = tab === 'audio' ? 'block' : 'none';
 }
+
+// ── Audio drop zone ────────────────────────────────────────────────
+
+let _audioDropZoneInitialized = false;
+
+function _initAudioDropZone() {
+  if (_audioDropZoneInitialized) return;
+  _audioDropZoneInitialized = true;
+
+  const dropZone = $('audioDropZone');
+  const audioInput = $('ingestAudio');
+
+  // Click to browse
+  dropZone.addEventListener('click', () => audioInput.click());
+
+  // File selected via input
+  audioInput.addEventListener('change', () => {
+    if (audioInput.files && audioInput.files[0]) {
+      _showAudioFile(audioInput.files[0]);
+    }
+  });
+
+  // Drag and drop
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.classList.add('drag-over');
+  });
+
+  dropZone.addEventListener('dragleave', () => {
+    dropZone.classList.remove('drag-over');
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      // Validate audio type
+      const ext = file.name.split('.').pop().toLowerCase();
+      const allowed = ['mp3', 'wav', 'm4a', 'webm', 'ogg', 'flac', 'mp4'];
+      if (!allowed.includes(ext)) {
+        showToast(`Unsupported format .${ext}. Use: ${allowed.join(', ')}`, 'error');
+        return;
+      }
+      // Transfer dropped file to the input
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      $('ingestAudio').files = dt.files;
+      _showAudioFile(file);
+    }
+  });
+}
+
+function _showAudioFile(file) {
+  $('audioDropZone').style.display = 'none';
+  $('audioFileInfo').style.display = 'flex';
+  $('audioFileName').textContent = file.name;
+  $('audioFileSize').textContent = _formatFileSize(file.size);
+}
+
+function clearAudioFile() {
+  const audioInput = $('ingestAudio');
+  if (audioInput) audioInput.value = '';
+  const dropZone = $('audioDropZone');
+  if (dropZone) dropZone.style.display = '';
+  const fileInfo = $('audioFileInfo');
+  if (fileInfo) fileInfo.style.display = 'none';
+}
+
+function _formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// ── Ingest handler ────────────────────────────────────────────────
 
 async function ingestMeeting() {
   const title = $('ingestTitle').value.trim();
   const attendees = $('ingestAttendees').value.trim();
   const isPaste = $('tabPaste').classList.contains('active');
+  const isAudio = $('tabAudio').classList.contains('active');
 
   const btnIngest = $('btnIngest');
   btnIngest.disabled = true;
-  btnIngest.innerHTML = '<span class="loading-spinner"></span> Ingesting...';
 
   try {
     if (isPaste) {
+      btnIngest.innerHTML = '<span class="loading-spinner"></span> Ingesting...';
       const text = $('ingestText').value.trim();
       if (!text) throw new Error('Please paste a transcript');
 
@@ -381,7 +462,38 @@ async function ingestMeeting() {
       selectMeeting(result.id);
       showToast(`Ingested: ${result.title}`, 'success');
 
+    } else if (isAudio) {
+      btnIngest.innerHTML = '<span class="loading-spinner"></span> Transcribing audio...';
+      const file = $('ingestAudio').files[0];
+      if (!file) throw new Error('Please select an audio file');
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('title', title || file.name.replace(/\.[^.]+$/, ''));
+      formData.append('attendees', attendees);
+
+      const res = await fetch('/api/meetings/ingest-audio', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || 'Audio upload failed');
+      }
+
+      const result = await res.json();
+      meetings[result.id] = result;
+      renderMeetingList();
+      selectMeeting(result.id);
+
+      const duration = result.duration_seconds
+        ? ` (${Math.round(result.duration_seconds)}s audio)`
+        : '';
+      showToast(`Transcribed and ingested: ${result.title}${duration}`, 'success');
+
     } else {
+      btnIngest.innerHTML = '<span class="loading-spinner"></span> Ingesting...';
       const file = $('ingestFile').files[0];
       if (!file) throw new Error('Please select a file');
 
@@ -413,7 +525,7 @@ async function ingestMeeting() {
     showToast(e.message, 'error');
   } finally {
     btnIngest.disabled = false;
-    btnIngest.innerHTML = '⚡ Ingest';
+    btnIngest.innerHTML = 'Ingest';
   }
 }
 

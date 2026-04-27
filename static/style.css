@@ -835,6 +835,108 @@ html, body {
 
 .form-tab:hover:not(.active) { color: var(--text-secondary); }
 
+/* ── Audio Upload Area ──────────────────────────────────────────── */
+
+.audio-upload-area {
+  border: 2px dashed var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 32px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--transition);
+  background: var(--bg-primary);
+}
+
+.audio-upload-area:hover,
+.audio-upload-area.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.audio-upload-icon {
+  font-size: 32px;
+  margin-bottom: 10px;
+  opacity: 0.7;
+}
+
+.audio-upload-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.audio-upload-formats {
+  font-size: 11px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.audio-file-selected {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  margin-top: 8px;
+}
+
+.audio-file-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.audio-file-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-file-size {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.audio-file-remove {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.audio-file-remove:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--error);
+}
+
+.audio-upload-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 10px;
+  line-height: 1.5;
+  padding: 0 2px;
+}
+
+.form-group input[type="file"] {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────── */
 
 .btn {
