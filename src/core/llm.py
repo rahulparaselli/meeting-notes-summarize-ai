@@ -55,12 +55,13 @@ async def generate_structured(
     schema: type[T],
     system: str = "",
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> T:
     """Generate with native Gemini response_schema."""
     config = types.GenerateContentConfig(
         system_instruction=system or None,
         temperature=temperature or _settings.gemma_temperature,
-        max_output_tokens=_settings.gemma_max_tokens,
+        max_output_tokens=max_tokens or _settings.gemma_max_tokens,
         response_mime_type="application/json",
         response_schema=schema,
     )
@@ -86,11 +87,12 @@ async def generate_text(
     prompt: str,
     system: str = "",
     temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     config = types.GenerateContentConfig(
         system_instruction=system or None,
         temperature=temperature or _settings.gemma_temperature,
-        max_output_tokens=_settings.gemma_max_tokens,
+        max_output_tokens=max_tokens or _settings.gemma_max_tokens,
     )
 
     async def _call():

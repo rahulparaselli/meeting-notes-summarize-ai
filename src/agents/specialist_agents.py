@@ -1,5 +1,6 @@
 """Each function is a LangGraph node. Receives AgentState, returns partial state update."""
 import json
+import logging
 import re
 from typing import Any
 
@@ -23,6 +24,14 @@ from src.core.models import (
     QueryType,
 )
 
+logger = logging.getLogger(__name__)
+
+# ── Max-token budgets per specialist (avoid default 4096 overkill) ────────────
+_SUMMARY_MAX_TOKENS = 1024
+_ACTION_ITEMS_MAX_TOKENS = 1024
+_DECISIONS_MAX_TOKENS = 1024
+_QA_MAX_TOKENS = 1024
+
 
 def _log(state: AgentState, step: str, detail: str = "") -> None:
     state.steps_taken.append(step)
@@ -38,6 +47,7 @@ async def summary_agent(state: AgentState) -> dict[str, Any]:
     raw = await generate_text(
         prompt=SUMMARY_PROMPT.format(context=ctx),
         system=SUMMARY_SYSTEM,
+        max_tokens=_SUMMARY_MAX_TOKENS,
     )
 
     tldr = _extract_tldr(raw)
@@ -78,13 +88,16 @@ async def action_items_agent(state: AgentState) -> dict[str, Any]:
             prompt=ACTION_ITEMS_PROMPT.format(context=ctx),
             schema=_Items,
             system=ACTION_ITEMS_SYSTEM,
+            max_tokens=_ACTION_ITEMS_MAX_TOKENS,
         )
         items = [i.model_dump() for i in result.items]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Structured generation failed for action_items: {e} — parsing as text")
         # Fallback: try text generation and parse manually
         raw = await generate_text(
             prompt=ACTION_ITEMS_PROMPT.format(context=ctx),
             system=ACTION_ITEMS_SYSTEM,
+            max_tokens=_ACTION_ITEMS_MAX_TOKENS,
         )
         items = _parse_json_items(raw, "items")
 
@@ -115,13 +128,16 @@ async def decisions_agent(state: AgentState) -> dict[str, Any]:
             prompt=DECISIONS_PROMPT.format(context=ctx),
             schema=_Decisions,
             system=DECISIONS_SYSTEM,
+            max_tokens=_DECISIONS_MAX_TOKENS,
         )
         decs = [d.model_dump() for d in result.decisions]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Structured generation failed for decisions: {e} — parsing as text")
         # Fallback: try text generation and parse manually
         raw = await generate_text(
             prompt=DECISIONS_PROMPT.format(context=ctx),
             system=DECISIONS_SYSTEM,
+            max_tokens=_DECISIONS_MAX_TOKENS,
         )
         decs = _parse_json_items(raw, "decisions")
 
@@ -143,6 +159,7 @@ async def qa_agent(state: AgentState) -> dict[str, Any]:
     raw = await generate_text(
         prompt=QA_PROMPT.format(context=ctx, query=state.query),
         system=QA_SYSTEM,
+        max_tokens=_QA_MAX_TOKENS,
     )
 
     sources = [

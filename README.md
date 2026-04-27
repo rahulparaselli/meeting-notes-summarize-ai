@@ -1,154 +1,165 @@
-# 🎙️ Meeting Notes Summariser — AI Agent
+# Meeting Notes Summariser -- AI Agent
 
-An **AI-powered meeting analysis system** that uses **LangGraph agents**, **RAG (Retrieval-Augmented Generation)**, and **Google Gemini** to answer questions about your meetings. Ingest transcripts (text or audio), then chat with an intelligent agent that can summarise, extract action items, identify decisions, and answer specific questions.
-
----
-
-## ✨ Key Features
-
-| Feature | Description |
-|---------|-------------|
-| 📝 **Multi-format Ingestion** | Paste text, upload `.txt`/`.md` files, or upload audio files (MP3, WAV, M4A) |
-| 🤖 **Agentic RAG Pipeline** | LangGraph-powered agent that classifies queries and routes to specialist agents |
-| 📋 **Meeting Summaries** | TL;DR + key discussion points from the transcript |
-| ✅ **Action Item Extraction** | Tasks with owners and deadlines in structured format |
-| 🎯 **Decision Tracking** | Confirmed decisions with context and participants |
-| 💬 **Q&A** | Ask any question — answers cite specific speakers and transcript sections |
-| 🔍 **Agent Trace Visibility** | See every step the agent takes (classify → retrieve → compress → answer) |
-| 📊 **LangSmith Integration** | Full observability — trace every LLM call, token usage, and latency |
-| 🗄️ **Smart Caching** | In-memory LRU + optional Redis for instant repeat queries |
+An AI-powered meeting analysis system built with LangGraph agents, RAG (Retrieval-Augmented Generation), and Google Gemini. Ingest meeting transcripts through a web UI, then chat with an intelligent agent that can summarise discussions, extract action items, identify decisions, and answer specific questions.
 
 ---
 
-## 🏗️ Architecture
+## Table of Contents
+
+- [Features](#features)
+- [Architecture Overview](#architecture-overview)
+- [How It Works](#how-it-works)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Configuration](#configuration)
+- [Debugging and Tracing](#debugging-and-tracing)
+- [Testing](#testing)
+- [Tech Stack](#tech-stack)
+
+---
+
+## Features
+
+- **Multi-format Ingestion** -- Paste text, upload `.txt`/`.md` files, or upload audio files (MP3, WAV, M4A)
+- **Agentic RAG Pipeline** -- LangGraph-powered agent classifies queries and routes to specialist agents
+- **Meeting Summaries** -- TL;DR and key discussion points from the transcript
+- **Action Item Extraction** -- Tasks with owners and deadlines in structured format
+- **Decision Tracking** -- Confirmed decisions with context and participants
+- **Question Answering** -- Ask any question with answers citing specific speakers and transcript sections
+- **Agent Trace Visibility** -- See every step the agent takes through the pipeline
+- **LangSmith Integration** -- Full observability with trace-level detail for every LLM call
+- **Smart Caching** -- In-memory LRU cache with optional Redis for instant repeat queries
+- **Custom Web UI** -- ChatGPT-style interface with persistent chat history per meeting
+
+---
+
+## Architecture Overview
+
+<!-- Architecture diagram placeholder -->
+
+The system follows a four-stage pipeline for every user query:
 
 ```
-User Query
-    │
-    ▼
-┌────────────────┐
-│ classify_query  │  ← Gemini classifies: summary / action_items / decisions / qa / general
-└───────┬────────┘
-        ▼
-┌────────────────────┐
-│ expand_and_retrieve │  ← HyDE generates hypothetical transcript, then MMR search in ChromaDB
-└───────┬────────────┘
-        ▼
-┌──────────────────┐
-│ compress_context  │  ← LLMLingua or extractive compression to reduce tokens
-└───────┬──────────┘
-        ▼
-┌──────────────────────┐
-│ Specialist Agent      │  ← One of: summary_agent / action_items_agent / decisions_agent / qa_agent
-└───────┬──────────────┘
-        ▼
-  Formatted Response
-  (Markdown + Agent Trace)
+User Query --> Classify --> Retrieve --> Compress --> Specialist Agent --> Response
 ```
+
+1. **Classify** -- Determines the intent (summary, action items, decisions, or Q&A)
+2. **Retrieve** -- Expands the query using HyDE and searches the vector store with MMR
+3. **Compress** -- Reduces retrieved context to keep only relevant content
+4. **Specialist Agent** -- Generates the final answer using the appropriate agent
+
+<!-- Detailed flow diagram placeholder -->
 
 ---
 
-## 🔧 How It Works
+## How It Works
 
-### 1. Ingestion Pipeline
+### Ingestion Pipeline
 
-When you upload or paste a meeting transcript:
+When a meeting transcript is submitted:
 
-1. **Speaker Parsing** — The transcript is parsed into speaker-separated segments (e.g., `Alice: ...`, `Bob: ...`)
-2. **Chunking** — Segments are split into ~300-token chunks with 40-token overlap, preserving speaker boundaries
-3. **Embedding** — Each chunk is embedded using `gemini-embedding-001` (batched in groups of 100)
-4. **Storage** — Chunks + embeddings are stored in ChromaDB with metadata (speaker, timestamps, meeting ID)
+1. The transcript is parsed into speaker-separated segments
+2. Segments are split into approximately 300-token chunks with 40-token overlap, preserving speaker boundaries
+3. Each chunk is embedded using Gemini Embedding and batched in groups of 100
+4. Chunks and embeddings are stored in ChromaDB with metadata (speaker, timestamps, meeting ID)
 
-### 2. Query Classification
+### Query Classification
 
-When you ask a question, the orchestrator agent uses Gemini to classify it:
+The orchestrator uses Gemini to classify incoming queries:
 
-| Query Type | Trigger Examples | Agent |
-|------------|-----------------|-------|
-| `summary` | "Summarise this meeting", "Give me an overview" | Summary Agent |
-| `action_items` | "What are the action items?", "Who needs to do what?" | Action Items Agent |
-| `decisions` | "What decisions were made?" | Decisions Agent |
-| `qa` | "What did Alice say about the budget?" | Q&A Agent |
-| `general` | Any other question | Q&A Agent (fallback) |
+| Query Type     | Example                                 | Routed To           |
+|----------------|----------------------------------------|---------------------|
+| `summary`      | "Summarise this meeting"               | Summary Agent       |
+| `action_items` | "What are the action items?"           | Action Items Agent  |
+| `decisions`    | "What decisions were made?"            | Decisions Agent     |
+| `qa`           | "What did Alice say about the budget?" | Q&A Agent           |
+| `general`      | Any other question                     | Q&A Agent (default) |
 
-### 3. RAG Retrieval (HyDE + MMR)
+### RAG Retrieval
 
-**HyDE (Hypothetical Document Embeddings):**
-Instead of searching with the raw query, the system first asks Gemini to generate a *hypothetical transcript excerpt* that would answer the question. This hypothetical text is embedded and used for search — producing much better retrieval results than raw query embedding.
+**HyDE (Hypothetical Document Embeddings)** -- Instead of embedding the raw query, the system first generates a hypothetical transcript excerpt that would answer the question. This produces embeddings closer to actual document embeddings, improving retrieval quality.
 
-**MMR (Maximal Marginal Relevance):**
-After initial retrieval, MMR re-ranks results to maximise both **relevance** (similar to query) and **diversity** (different from each other). This prevents getting 6 chunks that all say the same thing.
+**MMR (Maximal Marginal Relevance)** -- After initial retrieval, results are re-ranked to maximise both relevance to the query and diversity among results. This prevents retrieving multiple chunks that say the same thing.
 
-### 4. Context Compression
+### Context Compression
 
 Retrieved chunks are compressed before being sent to the specialist agent:
 
-- **LLMLingua** (if available): Neural compression that preserves meaning while reducing tokens by 20%
-- **Extractive fallback**: Keyword-scored sentence selection — keeps relevant sentences + context
+- **LLMLingua** (if available) -- Neural compression that preserves meaning while reducing token count
+- **Extractive fallback** -- Keyword-scored sentence selection that keeps relevant sentences plus surrounding context
+- Contexts under 2,000 characters skip compression to avoid information loss
 
-Contexts under 2000 chars skip compression entirely to avoid losing information.
+### Specialist Agents
 
-### 5. Specialist Agents
+Each agent uses Gemini with task-specific prompts and token-limited output:
 
-Each specialist agent uses Gemini with carefully engineered prompts:
+- **Summary Agent** -- Returns a TL;DR and a list of key discussion points
+- **Action Items Agent** -- Returns structured data with task, owner, and deadline fields
+- **Decisions Agent** -- Returns structured data with description, context, and participants
+- **Q&A Agent** -- Returns a cited answer with source chunk references
 
-- **Summary Agent** → Returns `TL;DR` + `Key Points` (bullet list)
-- **Action Items Agent** → Returns structured JSON: `[{task, owner, deadline}]`
-- **Decisions Agent** → Returns structured JSON: `[{description, context, participants}]`
-- **Q&A Agent** → Returns a cited answer with source chunk references
+### Caching
 
-### 6. Caching
-
-- **In-memory LRU cache** (256 entries) — always active, no setup needed
-- **Redis** (optional) — if Redis is running on `localhost:6379`, responses are also cached there with TTL
-- Cache key = `SHA256(meeting_id + query)` — identical queries return instantly
+- **In-memory LRU** (256 entries) -- Always active, no setup required
+- **Redis** (optional) -- If Redis is available, responses are cached with a configurable TTL
+- Cache key is a SHA256 hash of the meeting ID and query, so identical queries return instantly
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 meeting-notes-summarize-ai/
-├── app.py                          ← Streamlit UI (main entry point)
-├── main.py                         ← Graph re-export for LangGraph Studio
-├── langgraph.json                  ← LangGraph Studio configuration
-├── .env                            ← API keys and settings
-├── requirements.txt                ← Python dependencies
-│
-├── src/
-│   ├── agents/
-│   │   ├── graph.py                ← LangGraph pipeline (classify → retrieve → compress → agent)
-│   │   ├── prompts.py              ← All LLM prompts with format instructions
-│   │   └── specialist_agents.py    ← Summary, Action Items, Decisions, Q&A agents
-│   │
-│   ├── core/
-│   │   ├── config.py               ← Settings loaded from .env
-│   │   ├── llm.py                  ← Gemini API calls (text, structured, embeddings)
-│   │   └── models.py               ← Pydantic data models (Chunk, AgentState, etc.)
-│   │
-│   ├── ingestion/
-│   │   ├── pipeline.py             ← Ingest text/audio → parse speakers → chunk → embed → store
-│   │   ├── chunker.py              ← Token-based chunking with speaker-boundary awareness
-│   │   ├── transcriber.py          ← OpenAI Whisper audio → text
-│   │   └── diarizer.py             ← Pyannote speaker diarization
-│   │
-│   └── rag/
-│       ├── vector_store.py         ← ChromaDB with MMR search
-│       ├── query_expander.py       ← HyDE query expansion
-│       ├── compressor.py           ← LLMLingua / extractive context compression
-│       └── cache.py                ← In-memory LRU + optional Redis cache
-│
-├── data/chroma/                    ← Vector store data (auto-created)
-├── scripts/
-│   └── test_pipeline.py            ← End-to-end test script
-└── tests/                          ← Unit tests
+|-- server.py                       # FastAPI backend (REST API + static file serving)
+|-- main.py                         # Graph re-export for LangGraph Studio
+|-- langgraph.json                  # LangGraph Studio configuration
+|-- .env                            # API keys and settings
+|-- requirements.txt                # Python dependencies
+|
+|-- static/
+|   |-- index.html                  # Web UI entry point
+|   |-- style.css                   # UI styles
+|   +-- app.js                      # Frontend logic (chat, ingestion, history)
+|
+|-- src/
+|   |-- agents/
+|   |   |-- graph.py                # LangGraph pipeline definition
+|   |   |-- prompts.py              # All LLM prompts with format instructions
+|   |   +-- specialist_agents.py    # Summary, Action Items, Decisions, Q&A agents
+|   |
+|   |-- core/
+|   |   |-- config.py               # Settings loaded from .env via Pydantic
+|   |   |-- llm.py                  # Gemini API wrapper (text, structured, embeddings)
+|   |   +-- models.py               # Data models (Chunk, AgentState, etc.)
+|   |
+|   |-- ingestion/
+|   |   |-- pipeline.py             # Ingest text/audio, parse speakers, chunk, embed, store
+|   |   |-- chunker.py              # Token-based chunking with speaker-boundary awareness
+|   |   |-- transcriber.py          # OpenAI Whisper audio-to-text
+|   |   +-- diarizer.py             # Pyannote speaker diarization
+|   |
+|   +-- rag/
+|       |-- vector_store.py         # ChromaDB wrapper with MMR search
+|       |-- query_expander.py       # HyDE query expansion
+|       |-- compressor.py           # LLMLingua and extractive context compression
+|       +-- cache.py                # In-memory LRU + optional Redis cache
+|
+|-- data/chroma/                    # Vector store data (auto-created)
+|-- scripts/
+|   +-- test_pipeline.py            # End-to-end test script
++-- tests/                          # Unit tests
 ```
 
 ---
 
-## 🚀 Quick Start
+## Getting Started
 
-### 1. Clone & Install
+### Prerequisites
+
+- Python 3.12 or higher
+- A Google AI Studio API key (free at https://aistudio.google.com/apikey)
+
+### Installation
 
 ```bash
 git clone https://github.com/your-username/meeting-notes-summarize-ai.git
@@ -156,93 +167,106 @@ cd meeting-notes-summarize-ai
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+### Configuration
 
-Create a `.env` file (or edit the existing one):
+Copy and edit the environment file:
 
-```env
-# Required — get your free key from https://aistudio.google.com/apikey
+```
 GEMINI_API_KEY=your_gemini_api_key_here
-
-# LLM settings
-GEMMA_MODEL=gemma-4-26b-a4b-it
-EMBEDDING_MODEL=gemini-embedding-001
-GEMMA_TEMPERATURE=0.2
-GEMMA_MAX_TOKENS=4096
-
-# RAG settings
-CHUNK_SIZE=300
-CHUNK_OVERLAP=40
-TOP_K_RETRIEVAL=6
-RERANK_TOP_K=3
-
-# Vector store
-CHROMA_PERSIST_DIR=./data/chroma
-CHROMA_COLLECTION=meetings
-
-# Cache (optional — works without Redis)
-REDIS_URL=redis://localhost:6379
-CACHE_TTL_SECONDS=3600
-
-# LangSmith tracing (optional — get free key from https://smith.langchain.com)
-LANGSMITH_API_KEY=your_langsmith_api_key_here
-LANGCHAIN_TRACING_V2=true
-LANGCHAIN_PROJECT=meeting-summariser
-
-# Whisper (for audio ingestion)
-WHISPER_MODEL=base
 ```
 
-### 3. Run the Streamlit App
+See the [Configuration](#configuration) section below for all available settings.
+
+### Running the Application
 
 ```bash
-streamlit run app.py
+uvicorn server:app --reload
 ```
 
-Open **http://localhost:8501** in your browser.
+Open http://localhost:8000 in your browser.
 
-### 4. Use the App
+### Using the Application
 
-1. **Sidebar → Ingest Meeting**
-   - Paste transcript text, upload a `.txt` file, or upload an audio file
-   - Add a title and attendees (optional)
-   - Click **⚡ Ingest**
-
-2. **Main Area → Chat**
-   - Use quick action buttons: **Summarise**, **Action Items**, **Decisions**, **Ownership**
-   - Or type any question in the chat input
-   - View the **Agent Trace** expander to see every pipeline step
+1. **Ingest a Meeting** -- Click "New Meeting", paste or upload a transcript, add a title, and submit
+2. **Ask Questions** -- Use the quick action buttons (Summary, Action Items, Decisions) or type any question
+3. **View Traces** -- Expand the "Agent Thinking" section on any response to see the full pipeline trace
+4. **Switch Meetings** -- Use the sidebar to navigate between previously ingested meetings
 
 ---
 
-## 🔍 LangGraph Studio (Optional)
+## Configuration
 
-For debugging and step-by-step agent visualisation:
+All settings are loaded from the `.env` file.
+
+### Required
+
+| Variable         | Description                  |
+|------------------|------------------------------|
+| `GEMINI_API_KEY` | Google AI Studio API key     |
+
+### LLM Settings
+
+| Variable            | Default                  | Description                |
+|---------------------|--------------------------|----------------------------|
+| `GEMMA_MODEL`       | `gemma-4-26b-a4b-it`    | LLM model for generation  |
+| `EMBEDDING_MODEL`   | `gemini-embedding-001`  | Model for vector embeddings|
+| `GEMMA_TEMPERATURE` | `0.2`                   | Generation temperature     |
+| `GEMMA_MAX_TOKENS`  | `4096`                  | Max output tokens (global) |
+
+### RAG Settings
+
+| Variable           | Default          | Description                          |
+|--------------------|------------------|--------------------------------------|
+| `CHUNK_SIZE`       | `300`            | Tokens per chunk during ingestion    |
+| `CHUNK_OVERLAP`    | `40`             | Overlap tokens between chunks        |
+| `TOP_K_RETRIEVAL`  | `6`              | Number of chunks to retrieve         |
+| `RERANK_TOP_K`     | `3`              | Chunks to keep after re-ranking      |
+
+### Storage
+
+| Variable             | Default              | Description                |
+|----------------------|----------------------|----------------------------|
+| `CHROMA_PERSIST_DIR` | `./data/chroma`      | ChromaDB storage path      |
+| `CHROMA_COLLECTION`  | `meetings`           | ChromaDB collection name   |
+| `REDIS_URL`          | `redis://localhost:6379` | Redis URL (optional)   |
+| `CACHE_TTL_SECONDS`  | `3600`               | Cache time-to-live         |
+
+### Observability
+
+| Variable              | Default               | Description                |
+|-----------------------|-----------------------|----------------------------|
+| `LANGSMITH_API_KEY`   | --                    | LangSmith API key          |
+| `LANGCHAIN_TRACING_V2`| `true`               | Enable LangChain tracing   |
+| `LANGCHAIN_PROJECT`   | `meeting-summariser`  | LangSmith project name     |
+
+### Audio (Optional)
+
+| Variable        | Default | Description              |
+|-----------------|---------|--------------------------|
+| `WHISPER_MODEL` | `base`  | Whisper model size       |
+
+---
+
+## Debugging and Tracing
+
+### LangGraph Studio
+
+For visual debugging and step-by-step agent inspection:
 
 ```bash
+pip install "langgraph-cli[inmem]"
 python -m langgraph_cli dev
 ```
 
-This starts the LangGraph dev server at `http://127.0.0.1:2024` and opens LangGraph Studio in your browser where you can:
-- Visualise the agent graph
-- Inspect state at each node
-- View LLM inputs/outputs
-- Debug retrieval and compression
+This starts a dev server at http://127.0.0.1:2024 with a Studio UI where you can visualise the agent graph, inspect state at each node, and view LLM inputs and outputs.
 
-> **Note:** LangGraph Studio requires data to already be ingested via the Streamlit app.
+### LangSmith
+
+When `LANGSMITH_API_KEY` is configured, every pipeline run is traced to your LangSmith dashboard at https://smith.langchain.com. Traces include LLM inputs and outputs, token usage, latency per node, and error details.
 
 ---
 
-## 📊 LangSmith Tracing (Optional)
-
-When `LANGSMITH_API_KEY` is configured:
-- Every pipeline run is traced to your [LangSmith dashboard](https://smith.langchain.com)
-- View: LLM inputs/outputs, token usage, latency per node, error traces
-- The Streamlit sidebar shows a green "LangSmith tracing: ON" indicator
-
----
-
-## 🧪 Testing
+## Testing
 
 Run the end-to-end pipeline test:
 
@@ -250,51 +274,31 @@ Run the end-to-end pipeline test:
 python scripts/test_pipeline.py
 ```
 
-This ingests a sample transcript and runs summary + action items queries, verifying:
-- ✅ Speaker parsing and chunking
-- ✅ Embedding and vector storage
-- ✅ HyDE query expansion
-- ✅ MMR retrieval
-- ✅ Context compression
-- ✅ Query classification
-- ✅ Specialist agent output formatting
+This ingests a sample transcript and runs queries to verify speaker parsing, chunking, embedding, vector storage, HyDE expansion, MMR retrieval, context compression, query classification, and specialist agent output.
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| **LLM** | Google Gemini (`gemma-4-26b-a4b-it`) |
-| **Embeddings** | Google Gemini (`gemini-embedding-001`) |
-| **Agent Framework** | LangGraph |
-| **Vector Store** | ChromaDB |
-| **Query Expansion** | HyDE (Hypothetical Document Embeddings) |
-| **Retrieval** | MMR (Maximal Marginal Relevance) |
-| **Context Compression** | LLMLingua / Extractive fallback |
-| **UI** | Streamlit |
-| **Audio Transcription** | OpenAI Whisper |
-| **Speaker Diarization** | Pyannote Audio |
-| **Caching** | In-memory LRU + Redis (optional) |
-| **Observability** | LangSmith |
-| **Data Models** | Pydantic v2 |
+| Component              | Technology                                    |
+|------------------------|-----------------------------------------------|
+| LLM                    | Google Gemini (gemma-4-26b-a4b-it)            |
+| Embeddings             | Google Gemini (gemini-embedding-001)          |
+| Agent Framework        | LangGraph                                     |
+| Vector Store           | ChromaDB                                      |
+| Query Expansion        | HyDE (Hypothetical Document Embeddings)       |
+| Retrieval Strategy     | MMR (Maximal Marginal Relevance)              |
+| Context Compression    | LLMLingua / Extractive fallback               |
+| Backend                | FastAPI + Uvicorn                              |
+| Frontend               | Vanilla HTML, CSS, JavaScript                  |
+| Audio Transcription    | OpenAI Whisper                                |
+| Speaker Diarization    | Pyannote Audio                                |
+| Caching                | In-memory LRU + Redis (optional)              |
+| Observability          | LangSmith                                     |
+| Data Models            | Pydantic v2                                   |
 
 ---
 
-## 📋 Environment Variables Reference
+## License
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `GEMINI_API_KEY` | ✅ | — | Google AI Studio API key |
-| `GEMMA_MODEL` | ❌ | `gemma-4-26b-a4b-it` | LLM model for generation |
-| `EMBEDDING_MODEL` | ❌ | `gemini-embedding-001` | Model for vector embeddings |
-| `GEMMA_TEMPERATURE` | ❌ | `0.2` | LLM temperature (0-1) |
-| `GEMMA_MAX_TOKENS` | ❌ | `4096` | Max output tokens |
-| `CHUNK_SIZE` | ❌ | `300` | Tokens per chunk |
-| `CHUNK_OVERLAP` | ❌ | `40` | Overlap tokens between chunks |
-| `TOP_K_RETRIEVAL` | ❌ | `6` | Number of chunks to retrieve |
-| `CHROMA_PERSIST_DIR` | ❌ | `./data/chroma` | ChromaDB storage path |
-| `REDIS_URL` | ❌ | `redis://localhost:6379` | Redis URL (optional) |
-| `LANGSMITH_API_KEY` | ❌ | — | LangSmith API key (optional) |
-| `LANGCHAIN_PROJECT` | ❌ | `meeting-summariser` | LangSmith project name |
-| `WHISPER_MODEL` | ❌ | `base` | Whisper model size |
+This project is for educational and personal use.

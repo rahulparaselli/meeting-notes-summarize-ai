@@ -57,6 +57,7 @@ async def classify_query(state: GraphState) -> dict[str, Any]:
             prompt=QUERY_CLASSIFIER_PROMPT.format(query=query),
             schema=_Classification,
             system=ORCHESTRATOR_SYSTEM,
+            max_tokens=256,
         )
         try:
             qtype = QueryType(result.query_type)

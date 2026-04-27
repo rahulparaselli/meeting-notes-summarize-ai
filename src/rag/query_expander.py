@@ -33,6 +33,7 @@ async def expand_query_hyde(query: str) -> str:
             prompt=f"Question about a meeting: {query}\n\nWrite a short hypothetical meeting transcript excerpt that would answer this:",
             system=_HYDE_SYSTEM,
             temperature=0.3,
+            max_tokens=150,
         )
 
         if hypothetical and len(hypothetical.strip()) > 10:
