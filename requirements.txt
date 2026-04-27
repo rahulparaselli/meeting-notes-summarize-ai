@@ -25,8 +25,9 @@ pydantic>=2.9.0
 pydantic-settings>=2.5.0
 python-dotenv>=1.0.0
 
-# UI
-streamlit>=1.38.0
+# API Server
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
 
 # Cache (optional — falls back to in-memory if Redis not available)
 redis>=5.1.0

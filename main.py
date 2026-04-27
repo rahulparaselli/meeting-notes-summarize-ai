@@ -2,7 +2,8 @@
 Meeting Summariser — AI Agent
 
 Run with:
-    streamlit run app.py
+    uvicorn server:app --reload
+    (then open http://localhost:8000)
 
 For LangSmith tracing, set LANGSMITH_API_KEY in .env
 """

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="AI-powered meeting analysis with RAG — summarise, extract action items, decisions, and ask questions about your meetings.">
+  <title>Meeting Summariser AI</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="app-layout">
+
+  <!-- ═══════════ Sidebar ═══════════ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-brand">
+        <div class="logo">🎙️</div>
+        <div>
+          <h1>Meeting Summariser</h1>
+          <div class="subtitle">AI-powered analysis</div>
+        </div>
+      </div>
+      <button class="btn-new-meeting" id="btnNewMeeting" onclick="openIngestModal()">
+        <span class="icon">＋</span> New Meeting
+      </button>
+    </div>
+
+    <div class="sidebar-meetings" id="meetingList">
+      <div class="meetings-label">Past Meetings</div>
+      <div class="no-meetings" id="noMeetings">
+        <div class="empty-icon">📭</div>
+        No meetings yet.<br>Ingest a transcript to begin.
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="dot"></div>
+      <span>Powered by Gemini + LangGraph</span>
+    </div>
+  </aside>
+
+  <!-- ═══════════ Main ═══════════ -->
+  <main class="main-content">
+
+    <!-- Chat Header (hidden until a meeting is selected) -->
+    <div class="chat-header" id="chatHeader" style="display:none;">
+      <div class="chat-header-left">
+        <h2 id="chatTitle">Meeting</h2>
+      </div>
+      <div class="meeting-id-badge" id="chatMeetingId"></div>
+    </div>
+
+    <!-- Welcome Screen -->
+    <div class="welcome-screen" id="welcomeScreen">
+      <div class="welcome-icon">🎙️</div>
+      <h2>Meeting Summariser AI</h2>
+      <p>Ingest a meeting transcript from the sidebar, then ask questions, get summaries, action items, and decisions — all powered by AI.</p>
+    </div>
+
+    <!-- Quick Actions (hidden until meeting selected) -->
+    <div class="quick-actions" id="quickActions" style="display:none;">
+      <button class="quick-action-btn" onclick="sendQuickAction('Summarise this meeting')">📋 Summarise</button>
+      <button class="quick-action-btn" onclick="sendQuickAction('What are the action items?')">✅ Action Items</button>
+      <button class="quick-action-btn" onclick="sendQuickAction('What decisions were made?')">🎯 Decisions</button>
+      <button class="quick-action-btn" onclick="sendQuickAction('Who was responsible for what?')">👤 Ownership</button>
+    </div>
+
+    <!-- Chat Messages -->
+    <div class="chat-messages" id="chatMessages" style="display:none;">
+      <!-- Messages injected here by JS -->
+    </div>
+
+    <!-- Typing Indicator -->
+    <div class="typing-indicator" id="typingIndicator">
+      <div class="message-header">
+        <div class="message-avatar" style="background:linear-gradient(135deg,#1a1a2e,#16213e);border:1px solid var(--border-color);color:var(--accent);">✦</div>
+        <span class="message-sender">AI</span>
+      </div>
+      <div class="typing-dots">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+
+    <!-- Chat Input (hidden until meeting selected) -->
+    <div class="chat-input-area" id="chatInputArea" style="display:none;">
+      <div class="chat-input-wrapper">
+        <textarea
+          id="chatInput"
+          rows="1"
+          placeholder="Ask anything about this meeting..."
+          onkeydown="handleInputKeydown(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+          ▲
+        </button>
+      </div>
+      <div class="chat-input-hint">Press Enter to send · Shift+Enter for new line</div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ═══════════ Ingest Modal ═══════════ -->
+<div class="modal-overlay" id="ingestModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>📥 Ingest Meeting</h3>
+      <button class="modal-close" onclick="closeIngestModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-tabs">
+        <button class="form-tab active" id="tabPaste" onclick="switchIngestTab('paste')">📝 Paste Text</button>
+        <button class="form-tab" id="tabUpload" onclick="switchIngestTab('upload')">📄 Upload File</button>
+      </div>
+
+      <div class="form-group">
+        <label for="ingestTitle">Meeting Title</label>
+        <input type="text" id="ingestTitle" placeholder="e.g. Q4 Planning · Oct 2024">
+      </div>
+
+      <div class="form-group">
+        <label for="ingestAttendees">Attendees (optional)</label>
+        <input type="text" id="ingestAttendees" placeholder="Alice, Bob, Carol">
+      </div>
+
+      <!-- Paste tab -->
+      <div id="ingestPasteTab">
+        <div class="form-group">
+          <label for="ingestText">Transcript</label>
+          <textarea id="ingestText" rows="6" placeholder="Alice: Let's start the meeting...&#10;Bob: First item is the budget..."></textarea>
+        </div>
+      </div>
+
+      <!-- Upload tab -->
+      <div id="ingestUploadTab" style="display:none;">
+        <div class="form-group">
+          <label for="ingestFile">Upload .txt file</label>
+          <input type="file" id="ingestFile" accept=".txt,.md,.csv">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeIngestModal()">Cancel</button>
+      <button class="btn btn-primary" id="btnIngest" onclick="ingestMeeting()">⚡ Ingest</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ Toast Container ═══════════ -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
