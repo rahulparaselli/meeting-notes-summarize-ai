@@ -1,4 +1,6 @@
 """Each function is a LangGraph node. Receives AgentState, returns partial state update."""
+import json
+import re
 from typing import Any
 
 from src.agents.prompts import (
@@ -27,6 +29,8 @@ def _log(state: AgentState, step: str, detail: str = "") -> None:
     state.agent_scratchpad.append({"step": step, "detail": detail})
 
 
+# ── Summary Agent ─────────────────────────────────────────────────────────────
+
 async def summary_agent(state: AgentState) -> dict[str, Any]:
     _log(state, "summary_agent", "Generating meeting TL;DR and key points")
 
@@ -36,16 +40,27 @@ async def summary_agent(state: AgentState) -> dict[str, Any]:
         system=SUMMARY_SYSTEM,
     )
 
+    tldr = _extract_tldr(raw)
+    key_points = _extract_bullets(raw)
+
     output = MeetingSummary(
-        tldr=_extract_tldr(raw),
-        key_points=_extract_bullets(raw),
+        tldr=tldr,
+        key_points=key_points,
         action_items=[],
         decisions=[],
         attendees=[],
     )
-    return {"final_output": output.model_dump(), "steps_taken": state.steps_taken,
-            "agent_scratchpad": state.agent_scratchpad}
 
+    _log(state, "summary_done", f"TL;DR: {tldr[:80]}... | {len(key_points)} key points")
+
+    return {
+        "final_output": output.model_dump(),
+        "steps_taken": state.steps_taken,
+        "agent_scratchpad": state.agent_scratchpad,
+    }
+
+
+# ── Action Items Agent ────────────────────────────────────────────────────────
 
 async def action_items_agent(state: AgentState) -> dict[str, Any]:
     _log(state, "action_items_agent", "Extracting tasks, owners, and deadlines")
@@ -58,14 +73,31 @@ async def action_items_agent(state: AgentState) -> dict[str, Any]:
     class _Items(BaseModel):
         items: list[ActionItem]
 
-    result = await generate_structured(
-        prompt=ACTION_ITEMS_PROMPT.format(context=ctx),
-        schema=_Items,
-        system=ACTION_ITEMS_SYSTEM,
-    )
-    return {"final_output": {"action_items": [i.model_dump() for i in result.items]},
-            "steps_taken": state.steps_taken, "agent_scratchpad": state.agent_scratchpad}
+    try:
+        result = await generate_structured(
+            prompt=ACTION_ITEMS_PROMPT.format(context=ctx),
+            schema=_Items,
+            system=ACTION_ITEMS_SYSTEM,
+        )
+        items = [i.model_dump() for i in result.items]
+    except Exception:
+        # Fallback: try text generation and parse manually
+        raw = await generate_text(
+            prompt=ACTION_ITEMS_PROMPT.format(context=ctx),
+            system=ACTION_ITEMS_SYSTEM,
+        )
+        items = _parse_json_items(raw, "items")
 
+    _log(state, "action_items_done", f"Found {len(items)} action items")
+
+    return {
+        "final_output": {"action_items": items},
+        "steps_taken": state.steps_taken,
+        "agent_scratchpad": state.agent_scratchpad,
+    }
+
+
+# ── Decisions Agent ───────────────────────────────────────────────────────────
 
 async def decisions_agent(state: AgentState) -> dict[str, Any]:
     _log(state, "decisions_agent", "Identifying confirmed decisions from discussion")
@@ -78,17 +110,34 @@ async def decisions_agent(state: AgentState) -> dict[str, Any]:
     class _Decisions(BaseModel):
         decisions: list[Decision]
 
-    result = await generate_structured(
-        prompt=DECISIONS_PROMPT.format(context=ctx),
-        schema=_Decisions,
-        system=DECISIONS_SYSTEM,
-    )
-    return {"final_output": {"decisions": [d.model_dump() for d in result.decisions]},
-            "steps_taken": state.steps_taken, "agent_scratchpad": state.agent_scratchpad}
+    try:
+        result = await generate_structured(
+            prompt=DECISIONS_PROMPT.format(context=ctx),
+            schema=_Decisions,
+            system=DECISIONS_SYSTEM,
+        )
+        decs = [d.model_dump() for d in result.decisions]
+    except Exception:
+        # Fallback: try text generation and parse manually
+        raw = await generate_text(
+            prompt=DECISIONS_PROMPT.format(context=ctx),
+            system=DECISIONS_SYSTEM,
+        )
+        decs = _parse_json_items(raw, "decisions")
 
+    _log(state, "decisions_done", f"Found {len(decs)} decisions")
+
+    return {
+        "final_output": {"decisions": decs},
+        "steps_taken": state.steps_taken,
+        "agent_scratchpad": state.agent_scratchpad,
+    }
+
+
+# ── Q&A Agent ─────────────────────────────────────────────────────────────────
 
 async def qa_agent(state: AgentState) -> dict[str, Any]:
-    _log(state, "qa_agent", f"Answering: '{state.query[:60]}...'")
+    _log(state, "qa_agent", f"Answering: '{state.query[:60]}'")
 
     ctx = state.compressed_context or "\n\n".join(c.text for c in state.retrieved_chunks)
     raw = await generate_text(
@@ -105,24 +154,91 @@ async def qa_agent(state: AgentState) -> dict[str, Any]:
         }
         for c in state.retrieved_chunks[:3]
     ]
+
     cited = CitedAnswer(answer=raw, sources=sources)
-    return {"final_output": cited.model_dump(),
-            "steps_taken": state.steps_taken, "agent_scratchpad": state.agent_scratchpad}
+
+    _log(state, "qa_done", f"Answer length: {len(raw)} chars, {len(sources)} sources")
+
+    return {
+        "final_output": cited.model_dump(),
+        "steps_taken": state.steps_taken,
+        "agent_scratchpad": state.agent_scratchpad,
+    }
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _extract_tldr(text: str) -> str:
+    """Extract TL;DR from formatted output."""
+    # Look for "TL;DR:" prefix
     for line in text.splitlines():
-        if line.strip() and not line.startswith("-"):
-            return line.strip()
-    return text[:200]
+        stripped = line.strip()
+        if stripped.upper().startswith("TL;DR"):
+            return re.sub(r"^TL;DR\s*:?\s*", "", stripped, flags=re.IGNORECASE).strip()
+
+    # Fallback: first non-empty, non-bullet line
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith(("-", "*", "•", "#", "KEY")):
+            return stripped
+    return text[:300]
 
 
 def _extract_bullets(text: str) -> list[str]:
+    """Extract bullet points from formatted output."""
     bullets = []
+    in_key_points = False
     for line in text.splitlines():
         stripped = line.strip()
+
+        # Start capturing after KEY POINTS header
+        if "KEY POINT" in stripped.upper() or "KEY DISCUSSION" in stripped.upper():
+            in_key_points = True
+            continue
+
         if stripped.startswith(("-", "•", "*", "·")):
-            bullets.append(stripped.lstrip("-•*· ").strip())
-    return bullets or [text[:200]]
+            bullet = stripped.lstrip("-•*· ").strip()
+            if bullet:
+                bullets.append(bullet)
+                in_key_points = True  # we found bullets
+
+        # Numbered items like "1. something"
+        elif re.match(r"^\d+[.)]\s+", stripped):
+            bullet = re.sub(r"^\d+[.)]\s+", "", stripped).strip()
+            if bullet:
+                bullets.append(bullet)
+
+    return bullets if bullets else [text[:300]]
+
+
+def _parse_json_items(raw: str, key: str) -> list[dict]:
+    """Try to parse JSON from raw LLM text output as fallback."""
+    try:
+        # Try direct JSON parse
+        data = json.loads(raw)
+        if isinstance(data, dict) and key in data:
+            return data[key]
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON block in the text
+    json_match = re.search(r"\{[\s\S]*\}", raw)
+    if json_match:
+        try:
+            data = json.loads(json_match.group())
+            if isinstance(data, dict) and key in data:
+                return data[key]
+        except json.JSONDecodeError:
+            pass
+
+    # Try to find JSON array
+    arr_match = re.search(r"\[[\s\S]*\]", raw)
+    if arr_match:
+        try:
+            return json.loads(arr_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return []

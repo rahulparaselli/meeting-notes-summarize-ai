@@ -1,28 +1,13 @@
 """
-LangGraph agent pipeline:
+LangGraph agent pipeline for meeting analysis.
 
-  START
-    │
-    ▼
-  classify_query          ← orchestrator decides query type
-    │
-    ▼
-  expand_and_retrieve     ← HyDE + MMR retrieval
-    │
-    ▼
-  compress_context        ← LLMLingua / extractive compression
-    │
-    ▼
-  route_to_agent          ← conditional branch
-   ├─ summary    → summary_agent
-   ├─ action_items → action_items_agent
-   ├─ decisions  → decisions_agent
-   └─ qa / general → qa_agent
-    │
-    ▼
-  END
+  classify_query → expand_and_retrieve → compress_context → specialist_agent
+
+Called directly from the Streamlit app via run_pipeline / run_pipeline_stream.
 """
-from typing import Any, Literal
+import logging
+import operator
+from typing import Annotated, Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
@@ -35,10 +20,26 @@ from src.agents.specialist_agents import (
     summary_agent,
 )
 from src.core.llm import generate_structured
-from src.core.models import AgentState, QueryType
+from src.core.models import AgentState, Chunk, QueryType
 from src.rag.compressor import compress_chunks
 from src.rag.query_expander import expand_query_hyde
 from src.rag.vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
+
+
+# ── Graph state with proper reducers ─────────────────────────────────────────
+
+class GraphState(TypedDict, total=False):
+    meeting_id: str
+    query: str
+    query_type: str
+    retrieved_chunks: list[dict[str, Any]]
+    compressed_context: str
+    agent_scratchpad: Annotated[list[dict[str, str]], operator.add]
+    final_output: dict[str, Any]
+    steps_taken: Annotated[list[str], operator.add]
+    error: str
 
 
 # ── node: classify ────────────────────────────────────────────────────────────
@@ -48,105 +49,205 @@ class _Classification(BaseModel):
     reasoning: str
 
 
-async def classify_query(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    s.steps_taken.append("classify_query")
-    s.agent_scratchpad.append({"step": "classify_query", "detail": f"Classifying: '{s.query[:80]}'"})
-
-    result = await generate_structured(
-        prompt=QUERY_CLASSIFIER_PROMPT.format(query=s.query),
-        schema=_Classification,
-        system=ORCHESTRATOR_SYSTEM,
-    )
+async def classify_query(state: GraphState) -> dict[str, Any]:
+    query = state.get("query", "")
 
     try:
-        qtype = QueryType(result.query_type)
-    except ValueError:
-        qtype = QueryType.GENERAL
+        result = await generate_structured(
+            prompt=QUERY_CLASSIFIER_PROMPT.format(query=query),
+            schema=_Classification,
+            system=ORCHESTRATOR_SYSTEM,
+        )
+        try:
+            qtype = QueryType(result.query_type)
+        except ValueError:
+            qtype = QueryType.GENERAL
 
-    s.query_type = qtype
-    s.agent_scratchpad.append({
-        "step": "classify_result",
-        "detail": f"Type={qtype.value} | {result.reasoning}"
-    })
-    return s.model_dump()
+        return {
+            "query_type": qtype.value,
+            "steps_taken": ["classify_query"],
+            "agent_scratchpad": [
+                {"step": "classify_query", "detail": f"Classifying: '{query[:80]}'"},
+                {"step": "classify_result", "detail": f"Type={qtype.value} | {result.reasoning}"},
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Classification failed: {e}")
+        return {
+            "query_type": "general",
+            "steps_taken": ["classify_query"],
+            "agent_scratchpad": [
+                {"step": "classify_query", "detail": f"Classification failed: {e} — defaulting to QA"},
+            ],
+        }
 
 
 # ── node: expand + retrieve ───────────────────────────────────────────────────
 
-async def expand_and_retrieve(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    s.steps_taken.append("expand_and_retrieve")
-    s.agent_scratchpad.append({"step": "expand_and_retrieve", "detail": "HyDE expansion + MMR retrieval"})
+async def expand_and_retrieve(state: GraphState) -> dict[str, Any]:
+    query = state.get("query", "")
+    meeting_id = state.get("meeting_id", "")
 
-    vs = VectorStore()
-    expanded_query = await expand_query_hyde(s.query)
+    try:
+        vs = VectorStore()
 
-    chunks = await vs.mmr_search(expanded_query, meeting_id=s.meeting_id)
-    s.retrieved_chunks = chunks
+        # HyDE expansion (falls back to raw query on failure)
+        expanded_query = await expand_query_hyde(query)
+        logger.info(f"Expanded query length: {len(expanded_query)} chars")
 
-    s.agent_scratchpad.append({
-        "step": "retrieval_result",
-        "detail": f"Retrieved {len(chunks)} diverse chunks via MMR"
-    })
-    return s.model_dump()
+        # MMR retrieval
+        chunks = await vs.mmr_search(expanded_query, meeting_id=meeting_id)
+        logger.info(f"Retrieved {len(chunks)} chunks for meeting {meeting_id}")
+
+        # If no chunks found with MMR, try direct search
+        if not chunks:
+            logger.warning("MMR returned 0 chunks — trying direct search")
+            chunks = await vs.search(query, meeting_id=meeting_id)
+
+        # If still no chunks, try without meeting_id filter
+        if not chunks:
+            logger.warning(f"No chunks for meeting_id={meeting_id} — searching all meetings")
+            chunks = await vs.search(query, meeting_id="")
+
+        # Serialize chunks to dicts for state storage
+        chunk_dicts = [
+            {
+                "id": c.id,
+                "text": c.text,
+                "speaker": c.speaker,
+                "start_time": c.start_time,
+                "end_time": c.end_time,
+                "meeting_id": c.meeting_id,
+                "chunk_index": c.chunk_index,
+            }
+            for c in chunks
+        ]
+
+        detail = f"Retrieved {len(chunks)} chunks via MMR"
+        if not chunks:
+            detail = "WARNING: No chunks found — vector store may be empty or meeting_id doesn't match"
+
+        return {
+            "retrieved_chunks": chunk_dicts,
+            "steps_taken": ["expand_and_retrieve"],
+            "agent_scratchpad": [
+                {"step": "hyde_expansion", "detail": f"Expanded query: {len(expanded_query)} chars"},
+                {"step": "retrieval_result", "detail": detail},
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Retrieval failed: {e}")
+        return {
+            "retrieved_chunks": [],
+            "steps_taken": ["expand_and_retrieve"],
+            "agent_scratchpad": [
+                {"step": "retrieval_error", "detail": f"Retrieval failed: {e}"},
+            ],
+        }
 
 
 # ── node: compress ────────────────────────────────────────────────────────────
 
-async def compress_context(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    s.steps_taken.append("compress_context")
-    s.agent_scratchpad.append({"step": "compress_context", "detail": "Reducing context tokens"})
+async def compress_context(state: GraphState) -> dict[str, Any]:
+    query = state.get("query", "")
+    chunk_dicts = state.get("retrieved_chunks", [])
 
-    if s.retrieved_chunks:
-        s.compressed_context = compress_chunks(s.retrieved_chunks, s.query)
+    try:
+        compressed = ""
+        if chunk_dicts:
+            chunk_objs = [Chunk(**cd) for cd in chunk_dicts]
+            compressed = compress_chunks(chunk_objs, query)
+        else:
+            logger.warning("No chunks to compress — context will be empty")
 
-    s.agent_scratchpad.append({
-        "step": "compression_done",
-        "detail": f"Context: {len(s.compressed_context)} chars"
-    })
-    return s.model_dump()
-
-
-# ── node wrappers (LangGraph needs dict I/O) ──────────────────────────────────
-
-async def run_summary_agent(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    updates = await summary_agent(s)
-    return {**state, **updates}
-
-
-async def run_action_items_agent(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    updates = await action_items_agent(s)
-    return {**state, **updates}
-
-
-async def run_decisions_agent(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    updates = await decisions_agent(s)
-    return {**state, **updates}
+        return {
+            "compressed_context": compressed,
+            "steps_taken": ["compress_context"],
+            "agent_scratchpad": [
+                {"step": "compress_context", "detail": f"Input: {len(chunk_dicts)} chunks"},
+                {"step": "compression_done", "detail": f"Output: {len(compressed)} chars"},
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Compression failed: {e}")
+        # Fallback: concatenate raw chunks
+        fallback = "\n\n".join(cd.get("text", "") for cd in chunk_dicts)
+        return {
+            "compressed_context": fallback,
+            "steps_taken": ["compress_context"],
+            "agent_scratchpad": [
+                {"step": "compression_error", "detail": f"Compression failed: {e} — using raw text"},
+            ],
+        }
 
 
-async def run_qa_agent(state: dict[str, Any]) -> dict[str, Any]:
-    s = AgentState(**state)
-    updates = await qa_agent(s)
-    return {**state, **updates}
+# ── specialist agent wrappers ────────────────────────────────────────────────
+
+def _build_agent_state(state: GraphState) -> AgentState:
+    """Convert graph state to internal AgentState for specialist agents."""
+    chunk_dicts = state.get("retrieved_chunks", [])
+    chunks = [Chunk(**cd) for cd in chunk_dicts] if chunk_dicts else []
+
+    return AgentState(
+        meeting_id=state.get("meeting_id", ""),
+        query=state.get("query", ""),
+        query_type=QueryType(state.get("query_type", "general")),
+        retrieved_chunks=chunks,
+        compressed_context=state.get("compressed_context", ""),
+        agent_scratchpad=[],
+        steps_taken=[],
+    )
+
+
+async def _run_agent_safe(state: GraphState, agent_fn, agent_name: str) -> dict[str, Any]:
+    """Run a specialist agent with error handling."""
+    try:
+        agent_state = _build_agent_state(state)
+        updates = await agent_fn(agent_state)
+        return {
+            "final_output": updates.get("final_output", {}),
+            "steps_taken": updates.get("steps_taken", []),
+            "agent_scratchpad": updates.get("agent_scratchpad", []),
+        }
+    except Exception as e:
+        logger.error(f"{agent_name} failed: {e}")
+        return {
+            "final_output": {"answer": f"Agent error: {e}", "error": True},
+            "steps_taken": [agent_name],
+            "agent_scratchpad": [
+                {"step": f"{agent_name}_error", "detail": str(e)},
+            ],
+        }
+
+
+async def run_summary_agent(state: GraphState) -> dict[str, Any]:
+    return await _run_agent_safe(state, summary_agent, "summary_agent")
+
+
+async def run_action_items_agent(state: GraphState) -> dict[str, Any]:
+    return await _run_agent_safe(state, action_items_agent, "action_items_agent")
+
+
+async def run_decisions_agent(state: GraphState) -> dict[str, Any]:
+    return await _run_agent_safe(state, decisions_agent, "decisions_agent")
+
+
+async def run_qa_agent(state: GraphState) -> dict[str, Any]:
+    return await _run_agent_safe(state, qa_agent, "qa_agent")
 
 
 # ── conditional router ────────────────────────────────────────────────────────
 
 def route_to_agent(
-    state: dict[str, Any],
+    state: GraphState,
 ) -> Literal["run_summary_agent", "run_action_items_agent", "run_decisions_agent", "run_qa_agent"]:
-    qtype = state.get("query_type", QueryType.GENERAL)
+    qtype = state.get("query_type", "general")
     routes = {
-        QueryType.SUMMARY: "run_summary_agent",
-        QueryType.ACTION_ITEMS: "run_action_items_agent",
-        QueryType.DECISIONS: "run_decisions_agent",
-        QueryType.QA: "run_qa_agent",
-        QueryType.GENERAL: "run_qa_agent",
+        "summary": "run_summary_agent",
+        "action_items": "run_action_items_agent",
+        "decisions": "run_decisions_agent",
+        "qa": "run_qa_agent",
+        "general": "run_qa_agent",
     }
     return routes.get(qtype, "run_qa_agent")  # type: ignore[return-value]
 
@@ -154,7 +255,7 @@ def route_to_agent(
 # ── build graph ───────────────────────────────────────────────────────────────
 
 def build_graph() -> Any:
-    g = StateGraph(dict)
+    g = StateGraph(GraphState)
 
     g.add_node("classify_query", classify_query)
     g.add_node("expand_and_retrieve", expand_and_retrieve)
@@ -190,17 +291,26 @@ graph = build_graph()
 
 
 async def run_pipeline(meeting_id: str, query: str) -> dict[str, Any]:
-    """Entry point for running the full agent pipeline."""
+    """Entry point — run the full agent pipeline and return result."""
     from src.rag.cache import get_cached, set_cached
 
     cached = get_cached(meeting_id, query)
     if cached:
+        logger.info(f"Cache HIT for meeting={meeting_id[:8]}, query='{query[:40]}'")
         return cached
 
-    initial_state: dict[str, Any] = AgentState(
-        meeting_id=meeting_id,
-        query=query,
-    ).model_dump()
+    logger.info(f"Running pipeline: meeting={meeting_id[:8]}, query='{query[:40]}'")
+
+    initial_state: GraphState = {
+        "meeting_id": meeting_id,
+        "query": query,
+        "query_type": "general",
+        "retrieved_chunks": [],
+        "compressed_context": "",
+        "agent_scratchpad": [],
+        "final_output": {},
+        "steps_taken": [],
+    }
 
     final_state = await graph.ainvoke(initial_state)
     result: dict[str, Any] = {
@@ -211,4 +321,28 @@ async def run_pipeline(meeting_id: str, query: str) -> dict[str, Any]:
     }
 
     set_cached(meeting_id, query, result)
+    logger.info(f"Pipeline complete: {len(result.get('steps', []))} steps")
     return result
+
+
+async def run_pipeline_stream(meeting_id: str, query: str):
+    """Stream each LangGraph node as it completes."""
+    initial_state: GraphState = {
+        "meeting_id": meeting_id,
+        "query": query,
+        "query_type": "general",
+        "retrieved_chunks": [],
+        "compressed_context": "",
+        "agent_scratchpad": [],
+        "final_output": {},
+        "steps_taken": [],
+    }
+
+    final_state = dict(initial_state)
+    async for event in graph.astream(initial_state, stream_mode="updates"):
+        for node_name, node_output in event.items():
+            final_state.update(node_output)
+            scratchpad = node_output.get("agent_scratchpad", [])
+            yield node_name, scratchpad, node_output
+
+    yield "__done__", [], final_state

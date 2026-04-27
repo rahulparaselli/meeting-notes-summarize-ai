@@ -1,11 +1,11 @@
-import uvicorn
-from src.core.config import get_settings
+"""
+Meeting Summariser — AI Agent
 
-if __name__ == "__main__":
-    s = get_settings()
-    uvicorn.run(
-        "src.api.main:app",
-        host=s.api_host,
-        port=s.api_port,
-        reload=s.api_debug,
-    )
+Run with:
+    streamlit run app.py
+
+For LangSmith tracing, set LANGSMITH_API_KEY in .env
+"""
+from src.agents.graph import graph  # noqa: F401
+
+__all__ = ["graph"]

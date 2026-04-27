@@ -7,8 +7,8 @@ class Settings(BaseSettings):
 
     # Gemini / Gemma — set GEMINI_API_KEY in .env
     gemini_api_key: str = "placeholder"
-    gemma_model: str = "gemma-4-27b-it"
-    embedding_model: str = "models/text-embedding-004"
+    gemma_model: str = "gemma-4-26b-a4b-it"
+    embedding_model: str = "gemini-embedding-001"
     gemma_temperature: float = 0.2
     gemma_max_tokens: int = 4096
 
@@ -27,10 +27,8 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 3600
     similarity_cache_threshold: float = 0.92
 
-    # API
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    api_debug: bool = False
+    # LangSmith / LangGraph Studio
+    langsmith_api_key: str = ""
 
     # Whisper
     whisper_model: str = "base"
@@ -39,3 +37,4 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+

@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "meeting_summariser": "./src/agents/graph.py:graph"
+  },
+  "env": ".env"
+}

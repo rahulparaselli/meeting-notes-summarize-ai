@@ -1,0 +1,38 @@
+# Core LLM
+google-generativeai>=0.8.0
+langchain-core>=1.3.0
+langchain-google-genai>=4.2.0
+
+# Agent Framework
+langgraph>=1.1.0
+
+# Vector Store
+chromadb>=1.5.0
+
+# Context Compression
+llmlingua>=0.2.2
+
+# Tokenization
+tiktoken>=0.12.0
+numpy>=2.0.0
+
+# Audio Transcription (optional)
+openai-whisper>=20240930
+pyannote-audio>=4.0.0
+
+# Data Models & Config
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+python-dotenv>=1.0.0
+
+# UI
+streamlit>=1.38.0
+
+# Cache (optional — falls back to in-memory if Redis not available)
+redis>=5.1.0
+
+# HTTP Client
+httpx>=0.27.0
+
+# LangGraph Studio (optional — for dev mode debugging)
+langgraph-cli[inmem]>=0.4.0
